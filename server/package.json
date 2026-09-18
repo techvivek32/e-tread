@@ -1,0 +1,20 @@
+{
+  "name": "nova-etrade-proxy",
+  "version": "1.0.0",
+  "private": true,
+  "description": "NOVA Terminal broker bridge for E*TRADE — OAuth 1.0a, order verification, synthetic OCO brackets",
+  "main": "etrade-proxy.cjs",
+  "scripts": {
+    "start": "node etrade-proxy.cjs",
+    "test": "node test/oauth1.test.cjs && node test/oco.test.cjs",
+    "check": "node --check etrade-proxy.cjs && node --check lib/oauth1.cjs && node --check lib/token-store.cjs && node --check lib/throttle.cjs && node --check lib/etrade-client.cjs && node --check lib/oco-watcher.cjs"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

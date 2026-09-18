@@ -1,0 +1,9 @@
+node_modules/
+.state/
+*.env
+.env
+.env.*
+!.env.example
+server/.state/
+*.tmp
+package-lock.json
