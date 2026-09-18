@@ -100,6 +100,15 @@ class EtradeClient {
       } catch (_) {
         /* non-JSON error body */
       }
+      // Error 30 means the ACCOUNT has not signed E*TRADE's Extended Hours Trading
+      // agreement — nothing in this stack can fix it, and the bare message does not say
+      // where to go. Point the trader at the fix instead of leaving them guessing.
+      if (String(code) === '30' || /Extended Hours Disclosure/i.test(message || '')) {
+        message =
+          'Your E*TRADE account has not signed the Extended Hours Trading agreement. ' +
+          'Sign it on etrade.com (Accounts → Agreements / Extended Hours Trading), then retry — ' +
+          'or untick After-hours to trade in regular hours.';
+      }
       throw new EtradeError(message || `E*TRADE ${res.status}: ${text.slice(0, 300)}`, {
         status: res.status,
         code,
