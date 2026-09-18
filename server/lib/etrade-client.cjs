@@ -107,6 +107,13 @@ class EtradeClient {
       // Error 30 means the ACCOUNT has not signed E*TRADE's Extended Hours Trading
       // agreement — nothing in this stack can fix it, and the bare message does not say
       // where to go. Point the trader at the fix instead of leaving them guessing.
+      if (/Leveraged\/Inverse ETF|ETN Acknowledgment/i.test(message || '')) {
+        message =
+          'Your E*TRADE account has not accepted the Leveraged/Inverse ETF & ETN acknowledgment ' +
+          '(these ETFs are leveraged products and E*TRADE requires a one-time sign-off). ' +
+          'Log in at etrade.com, place any order for this ETF there once — it will prompt you to ' +
+          'accept — then orders from here will work.';
+      }
       if (String(code) === '30' || /Extended Hours Disclosure/i.test(message || '')) {
         message =
           'Your E*TRADE account has not signed the Extended Hours Trading agreement. ' +
@@ -359,7 +366,10 @@ class EtradeClient {
   async listOrders(accountIdKey, opts = {}) {
     const j = await this._api('GET', `/v1/accounts/${accountIdKey}/orders`, {
       query: {
-        count: opts.count ?? 100,
+        // Measured against the live API: count above 100 is refused outright ("Invalid
+        // count specified. The count should be between 1 and 100"), and one oversized
+        // caller silently blinded the bracket watcher. Clamp here so no caller can.
+        count: Math.min(Number(opts.count) || 100, 100),
         status: opts.status,
         fromDate: opts.fromDate,
         toDate: opts.toDate,

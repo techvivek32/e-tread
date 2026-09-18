@@ -225,7 +225,7 @@ class OcoWatcher {
       const accounts = [...new Set(active.map((b) => b.accountIdKey))];
       const ordersByAccount = new Map();
       for (const key of accounts) {
-        ordersByAccount.set(key, await this.client.listOrders(key, { count: 200 }));
+        ordersByAccount.set(key, await this.client.listOrders(key, { count: 100 }));
       }
       this.reconciled = true;
 
@@ -411,7 +411,7 @@ class OcoWatcher {
   async _confirmGone(accountIdKey, orderId, { attempts = 6, delayMs = 1500 } = {}) {
     for (let i = 0; i < attempts; i += 1) {
       try {
-        const orders = await this.client.listOrders(accountIdKey, { count: 200 });
+        const orders = await this.client.listOrders(accountIdKey, { count: 100 });
         const found = orders.find((o) => String(o.orderId) === String(orderId));
         if (!found) return true;
         if (found.status === 'CANCELLED' || found.status === 'EXPIRED' || found.status === 'REJECTED') return true;
