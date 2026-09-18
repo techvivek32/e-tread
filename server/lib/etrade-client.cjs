@@ -98,7 +98,11 @@ class EtradeClient {
         code = j?.Error?.code;
         message = j?.Error?.message;
       } catch (_) {
-        /* non-JSON error body */
+        // Despite Accept: application/json, E*TRADE returns ORDER errors as XML
+        // (<Error><code>30</code><message>...</message></Error>). Pull the fields out
+        // so the code-specific hints below still fire.
+        code = /<code>\s*(\d+)\s*<\/code>/.exec(text)?.[1];
+        message = /<message>([^<]+)<\/message>/.exec(text)?.[1]?.trim();
       }
       // Error 30 means the ACCOUNT has not signed E*TRADE's Extended Hours Trading
       // agreement — nothing in this stack can fix it, and the bare message does not say
