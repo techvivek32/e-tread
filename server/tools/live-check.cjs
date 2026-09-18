@@ -6,7 +6,13 @@
  * It exercises every endpoint the terminal depends on and prints what came back, so a broken
  * field mapping shows up here rather than mid-trade.
  *
- *   node tools/live-check.cjs
+ *   node tools/live-check.cjs                 full check
+ *   node tools/live-check.cjs --read-only     no order is placed (default in production)
+ *   node tools/live-check.cjs --place-order   explicitly allow the order test in production
+ *
+ * ORDER TEST: placing an order is REAL in production. It is therefore skipped unless you pass
+ * --place-order. When it runs it submits a 1-share AAPL buy at a limit of $1 — far enough
+ * below any conceivable market that it cannot fill — and cancels it again immediately.
  *
  * SANDBOX HONESTY: E*TRADE's sandbox serves canned fixtures for several endpoints — quotes
  * come back as GOOG/IBM/SWOIX with null prices whatever you ask for, the order book is a
@@ -25,6 +31,8 @@ const { EtradeClient } = require('../lib/etrade-client.cjs');
 
 const STATE = process.env.STATE_DIR || path.join(__dirname, '..', '.state');
 const SANDBOX = (process.env.ETRADE_ENV || 'sandbox').toLowerCase() !== 'production';
+// Real money: never place an order in production unless it was asked for explicitly.
+const PLACE_ORDER = process.argv.includes('--place-order') || (SANDBOX && !process.argv.includes('--read-only'));
 
 const tokens = new TokenStore(path.join(STATE, 'etrade-token.enc.json'), process.env.ETRADE_TOKEN_KEY);
 const client = new EtradeClient({
@@ -116,7 +124,11 @@ async function step(name, fn) {
   });
 
   let placedId = null;
+  if (!PLACE_ORDER) {
+    console.log('  SKIPPED   order placement - real money. Re-run with --place-order to test it.');
+  }
   await step('order preview/place', async () => {
+    if (!PLACE_ORDER) return;
     // A limit far below the market: it cannot fill, and it is cancelled again below.
     const spec = {
       symbol: 'AAPL',
@@ -186,7 +198,7 @@ async function step(name, fn) {
     ok('transactions', `${tx.length} rows`);
     tx.slice(0, 3).forEach((x) =>
       detail(
-        `${x.transactionDate ? new Date(x.transactionDate * 1000).toISOString().slice(0, 10) : '?'} ` +
+        `${x.transactionDate ? new Date(x.transactionDate).toISOString().slice(0, 10) : '?'} ` +
           `${x.transactionType} ${x.symbol || '-'} qty=${x.quantity} px=${x.price} fee=${x.commission}`
       ));
   });

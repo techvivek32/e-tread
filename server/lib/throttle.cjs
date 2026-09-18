@@ -23,18 +23,40 @@ class Throttle {
     this.tokens = rps;
     this.pausedUntil = 0;
     this.backoffMs = 0;
+    this.refill = null;
+  }
 
+  /**
+   * The refill timer runs ONLY while there is work, and is a normal referenced timer.
+   *
+   * It used to be a permanent unref'd interval, which silently broke every non-server caller:
+   * once the bucket emptied, the queued request was waiting on a timer that did not hold the
+   * event loop open, so Node decided it had nothing left to do and exited cleanly — mid-run,
+   * exit code 0, no error. A long-running server never noticed (its listening socket keeps the
+   * loop alive) but a CLI check lost its last few calls. Starting and stopping it around real
+   * work keeps a script alive exactly as long as it has requests outstanding, and still lets
+   * the process exit the moment it is idle.
+   */
+  _ensureTimer() {
+    if (this.refill) return;
     this.refill = setInterval(() => {
       this.tokens = this.rps;
       this._drain();
+      if (!this.queue.length && !this.inFlight) this._stopTimer();
     }, 1000);
-    if (this.refill.unref) this.refill.unref();
+  }
+
+  _stopTimer() {
+    if (!this.refill) return;
+    clearInterval(this.refill);
+    this.refill = null;
   }
 
   /** Wrap an async fn so it only runs when a slot and a token are free. */
   run(fn) {
     return new Promise((resolve, reject) => {
       this.queue.push({ fn, resolve, reject });
+      this._ensureTimer();
       this._drain();
     });
   }
@@ -67,8 +89,14 @@ class Throttle {
         .finally(() => {
           this.inFlight -= 1;
           this._drain();
+          if (!this.queue.length && !this.inFlight && this.tokens > 0) this._stopTimer();
         });
     }
+  }
+
+  /** Release the timer so a finished process can exit. */
+  stop() {
+    this._stopTimer();
   }
 
   stats() {

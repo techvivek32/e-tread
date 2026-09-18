@@ -1,9 +1,13 @@
 node_modules/
-.state/
 *.env
 .env
 .env.*
 !.env.example
-server/.state/
-*.tmp
+server/*.tmp
 package-lock.json
+
+# Runtime state: the encrypted broker token and the live bracket ledger.
+# Wildcarded on purpose — .state, .state-prod, .state-anything. A token file reaching a
+# remote is the one mistake in this repo that cannot be walked back.
+.state*/
+**/.state*/

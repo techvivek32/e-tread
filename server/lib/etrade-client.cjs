@@ -320,7 +320,13 @@ class EtradeClient {
         price: num(b.price),
         commission: num(b.fee),
         netAmount: num(t.amount),
-        transactionDate: Number(t.transactionDate) || 0,
+        // Sandbox returns seconds, production returns milliseconds, with nothing in the
+        // response saying which. Anything below ~2001-09-09 in ms cannot be a real trade date,
+        // so treat it as seconds and scale it. Always milliseconds out of here.
+        transactionDate: (() => {
+          const v = Number(t.transactionDate) || 0;
+          return v > 0 && v < 1e12 ? v * 1000 : v;
+        })(),
         description: t.description || '',
         transactionType: t.transactionType || '',
         raw: t,
