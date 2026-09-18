@@ -240,6 +240,60 @@ const LONG = {
     assert.strictEqual(client.placed.length, 0, 'nothing may be placed on unknown state');
   });
 
+  await check('a trailing bracket places a REAL broker-held TRAILING_STOP_PRCT', async () => {
+    const client = fakeClient({ quotes: { AAPL: 100 } });
+    const w = new OcoWatcher({ client, stateFile: tmpFile() });
+    const b = w.register({ ...LONG, stopPrice: undefined, trailingPercent: 8, entryOrderId: null });
+
+    await w.tick();
+    const after = w.brackets.get(b.id);
+    assert.strictEqual(after.protective, 'TRAIL');
+    assert.ok(after.stopOrderId, 'the trailing stop must be a real order at the broker');
+    assert.strictEqual(client.placed[0].spec.priceType, 'TRAILING_STOP_PRCT');
+    assert.strictEqual(Number(client.placed[0].spec.stopPrice), 8, 'trail rides in stopPrice as a percent');
+    assert.strictEqual(client.placed[0].spec.orderTerm, 'GOOD_UNTIL_CANCEL');
+  });
+
+  await check('a take-profit-only bracket places nothing, then rotates in the target', async () => {
+    const client = fakeClient({ quotes: { AAPL: 100 } });
+    const w = new OcoWatcher({ client, stateFile: tmpFile() });
+    const b = w.register({
+      ...LONG,
+      stopPrice: undefined,
+      trailingPercent: undefined,
+      targetPrice: 110,
+      entryOrderId: null,
+    });
+
+    await w.tick();
+    assert.strictEqual(w.brackets.get(b.id).protective, 'NONE');
+    assert.strictEqual(client.placed.length, 0, 'nothing to place when no stop was asked for');
+
+    client.quotes.AAPL = 111;
+    await w.tick();
+    const after = w.brackets.get(b.id);
+    assert.strictEqual(after.state, STATES.TARGET_PLACED);
+    assert.strictEqual(client.placed.length, 1);
+    assert.strictEqual(client.placed[0].spec.priceType, 'LIMIT');
+    assert.strictEqual(client.cancelled.length, 0, 'there was no stop to cancel');
+  });
+
+  await check('a stop-only bracket never rotates, however far the price runs', async () => {
+    const client = fakeClient({ quotes: { AAPL: 100 } });
+    const w = new OcoWatcher({ client, stateFile: tmpFile() });
+    const b = w.register({ ...LONG, targetPrice: undefined, entryOrderId: null });
+
+    await w.tick(); // stop live
+    client.quotes.AAPL = 500;
+    await w.tick();
+    await w.tick();
+
+    const after = w.brackets.get(b.id);
+    assert.strictEqual(after.state, STATES.ARMED, 'no target means nothing to rotate to');
+    assert.strictEqual(client.placed.length, 1, 'only the stop was ever placed');
+    assert.strictEqual(client.cancelled.length, 0, 'the stop must stay live');
+  });
+
   await check('cancelling a bracket cancels the live stop too', async () => {
     const client = fakeClient({ quotes: { AAPL: 100 } });
     const w = new OcoWatcher({ client, stateFile: tmpFile() });

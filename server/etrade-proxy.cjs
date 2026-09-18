@@ -31,6 +31,7 @@ const { TokenStore } = require('./lib/token-store.cjs');
 const { Throttle } = require('./lib/throttle.cjs');
 const { EtradeClient, EtradeError } = require('./lib/etrade-client.cjs');
 const { OcoWatcher } = require('./lib/oco-watcher.cjs');
+const { getCandles } = require('./lib/chart.cjs');
 
 // ------------------------------------------------------------------ configuration
 
@@ -250,6 +251,14 @@ app.get(
   wrap(async (req, res) => res.json(await client.getPortfolio(account(req))))
 );
 
+app.get(
+  '/api/accounts/:key/transactions',
+  verifyCaller,
+  wrap(async (req, res) =>
+    res.json(await client.getTransactions(account(req), { days: Number(req.query.days) || 6 }))
+  )
+);
+
 // ---- orders ---------------------------------------------------------------------
 
 app.get(
@@ -301,6 +310,7 @@ app.post(
         positionSide: /^(BUY|BUY_OPEN)$/.test(spec.action) ? 'LONG' : 'SHORT',
         entryOrderId: placed.orderId,
         stopPrice: bracket.stopPrice,
+        trailingPercent: bracket.trailingPercent,
         targetPrice: bracket.targetPrice,
       });
     }
@@ -348,6 +358,20 @@ app.get(
   })
 );
 
+/**
+ * Candles for the chart UI. E*TRADE has no history endpoint, so this serves consolidated-tape
+ * data server-side. Display only — never the basis for an execution decision.
+ */
+app.get(
+  '/api/market/chart',
+  verifyCaller,
+  wrap(async (req, res) => {
+    const symbol = String(req.query.symbol || '').trim();
+    if (!symbol) return res.status(400).json({ error: 'symbol required' });
+    res.json(await getCandles(symbol, req.query.period, req.query.bar));
+  })
+);
+
 app.get(
   '/api/market/lookup/:q',
   verifyCaller,
@@ -375,8 +399,12 @@ app.post(
   verifyCaller,
   wrap(async (req, res) => {
     const b = req.body || {};
-    if (!b.symbol || !b.quantity || !b.stopPrice || !b.targetPrice || !b.positionSide) {
-      return res.status(400).json({ error: 'symbol, quantity, positionSide, stopPrice, targetPrice required' });
+    // At least one leg must be asked for, otherwise there is nothing to manage.
+    if (!b.symbol || !b.quantity || !b.positionSide) {
+      return res.status(400).json({ error: 'symbol, quantity and positionSide are required' });
+    }
+    if (b.stopPrice == null && b.trailingPercent == null && b.targetPrice == null) {
+      return res.status(400).json({ error: 'give at least one of stopPrice, trailingPercent or targetPrice' });
     }
     res.json(oco.register({ accountIdKey: b.accountIdKey || tokens.status().accountIdKey, ...b }));
   })

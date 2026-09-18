@@ -24,7 +24,6 @@ nova-etrade/
 ├── src/
 │   ├── lib/api/etrade.ts          THE broker layer — drop-in replacement for ibkr.ts
 │   └── components/EtradeConnect.tsx   OAuth login UI, session pill, bracket-health banner
-├── tsconfig.check.json         standalone strict typecheck (delete after dropping into the repo)
 ├── sql/01-etrade-trades.sql       etrade_trades + RLS + app_flags, for the NEW Supabase project
 └── nginx/nova-etrade.conf         TLS site for app :7180 and proxy :8005
 ```
@@ -34,7 +33,7 @@ nova-etrade/
 ```
 $ node test/oauth1.test.cjs     8 passed
 $ node test/oco.test.cjs       11 passed
-$ npx tsc -p tsconfig.check.json   strict, clean — etrade.ts + EtradeConnect.tsx
+$ npx tsc --noEmit (in the host app)  strict, clean — 0 errors across 105 files
 $ node --check <every .cjs>        clean
 ```
 

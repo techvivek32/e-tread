@@ -274,6 +274,41 @@ class EtradeClient {
     return out;
   }
 
+  /**
+   * Executed transactions. E*TRADE's own trade feed, used for the all-time archive.
+   * Dates are MMDDYYYY; a window is derived from `days` so callers keep the IBKR-style API.
+   */
+  async getTransactions(accountIdKey, { days = 6, count = 250 } = {}) {
+    const fmt = (d) =>
+      `${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}${d.getFullYear()}`;
+    const end = new Date();
+    const start = new Date(end.getTime() - Math.max(1, days) * 86400000);
+
+    const j = await this._api('GET', `/v1/accounts/${accountIdKey}/transactions`, {
+      query: { startDate: fmt(start), endDate: fmt(end), count, sortOrder: 'DESC' },
+    });
+    if (!j) return [];
+
+    return arr(j?.TransactionListResponse?.Transaction).map((t) => {
+      const b = t.Brokerage || {};
+      return {
+        transactionId: String(t.transactionId ?? ''),
+        orderNo: String(b.orderNo ?? ''),
+        symbol: b.Product?.symbol || b.displaySymbol || '',
+        securityType: b.Product?.securityType || 'EQ',
+        // Quantity is signed at E*TRADE: positive bought, negative sold.
+        quantity: num(b.quantity),
+        price: num(b.price),
+        commission: num(b.fee),
+        netAmount: num(t.amount),
+        transactionDate: Number(t.transactionDate) || 0,
+        description: t.description || '',
+        transactionType: t.transactionType || '',
+        raw: t,
+      };
+    });
+  }
+
   // ---------------------------------------------------------------------- orders
 
   /**

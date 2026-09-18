@@ -143,9 +143,11 @@ class OcoWatcher {
    * @param {number} o.quantity
    * @param {'LONG'|'SHORT'} o.positionSide  direction of the position being protected
    * @param {string|null} o.entryOrderId     null if the position already exists
-   * @param {number} o.stopPrice
-   * @param {number} o.targetPrice
-   * @param {object} [o.product]             option product fields, if securityType === 'OPTN'
+   * @param {number} [o.stopPrice]         fixed protective stop
+   * @param {number} [o.trailingPercent]   trailing stop, in percent; wins over stopPrice and is
+   *                                       placed as a REAL broker order (better than a watcher)
+   * @param {number} [o.targetPrice]       take-profit; watched here, not held by the broker
+   * @param {object} [o.product]           option product fields, if securityType === 'OPTN'
    */
   register(o) {
     const id = `br_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
@@ -158,8 +160,12 @@ class OcoWatcher {
       quantity: Number(o.quantity),
       positionSide: o.positionSide,
       entryOrderId: o.entryOrderId ? String(o.entryOrderId) : null,
-      stopPrice: Number(o.stopPrice),
-      targetPrice: Number(o.targetPrice),
+      stopPrice: o.stopPrice != null ? Number(o.stopPrice) : null,
+      trailingPercent: o.trailingPercent != null ? Number(o.trailingPercent) : null,
+      targetPrice: o.targetPrice != null ? Number(o.targetPrice) : null,
+      // Which protective order (if any) belongs at the broker. A trailing stop is preferred
+      // when asked for: it rides the price up and still survives this process dying.
+      protective: o.trailingPercent != null ? 'TRAIL' : o.stopPrice != null ? 'STOP' : 'NONE',
       stopOrderId: null,
       targetOrderId: null,
       state: o.entryOrderId ? STATES.PENDING_ENTRY : STATES.ARMED,
@@ -171,7 +177,11 @@ class OcoWatcher {
     // No entry order means the position is already open — arm the stop on the next tick.
     this.brackets.set(id, bracket);
     this._save();
-    console.log(`[oco] registered ${id} ${bracket.symbol} qty=${bracket.quantity} stop=${bracket.stopPrice} target=${bracket.targetPrice}`);
+    console.log(
+      `[oco] registered ${id} ${bracket.symbol} qty=${bracket.quantity} ` +
+        `protective=${bracket.protective}${bracket.trailingPercent != null ? `(${bracket.trailingPercent}%)` : bracket.stopPrice != null ? `(${bracket.stopPrice})` : ''} ` +
+        `target=${bracket.targetPrice ?? 'none'}`
+    );
     return bracket;
   }
 
@@ -290,9 +300,11 @@ class OcoWatcher {
         return;
       }
 
-      // Place the real broker-held stop once.
-      if (!b.stopOrderId) {
-        b.note = 'placing protective stop';
+      // Place the real broker-held protective order once. `protective: 'NONE'` means the
+      // trader asked for a take-profit only — there is nothing to place, just something to watch.
+      if (!b.stopOrderId && b.protective !== 'NONE') {
+        const trailing = b.protective === 'TRAIL';
+        b.note = trailing ? 'placing trailing stop' : 'placing protective stop';
         b.updatedAt = Date.now();
         this._save(); // invariant 3: persist intent before acting
 
@@ -302,8 +314,9 @@ class OcoWatcher {
           ...(b.product || {}),
           action: closeAction,
           quantity: b.quantity,
-          priceType: 'STOP',
-          stopPrice: b.stopPrice,
+          priceType: trailing ? 'TRAILING_STOP_PRCT' : 'STOP',
+          // TRAILING_STOP_PRCT carries the trail percentage in stopPrice.
+          stopPrice: trailing ? b.trailingPercent : b.stopPrice,
           orderTerm: 'GOOD_UNTIL_CANCEL',
           marketSession: 'REGULAR',
         };
@@ -316,14 +329,20 @@ class OcoWatcher {
           return;
         }
         b.stopOrderId = String(placed.orderId);
-        b.note = 'protected: stop live at broker';
+        b.note = trailing ? 'protected: trailing stop live at broker' : 'protected: stop live at broker';
         b.updatedAt = Date.now();
         this._save();
-        console.log(`[oco] ${b.id}: stop ${b.stopOrderId} live @ ${b.stopPrice}`);
+        console.log(
+          `[oco] ${b.id}: ${trailing ? 'trailing stop' : 'stop'} ${b.stopOrderId} live @ ` +
+            `${trailing ? `${b.trailingPercent}%` : b.stopPrice}`
+        );
         return;
       }
 
-      // Watch for the target. No quote => no decision (invariant 2).
+      // Watch for the target. Nothing to watch when no take-profit was asked for — the
+      // broker-held stop is the whole bracket, and it needs no help from us.
+      if (b.targetPrice == null) return;
+      // No quote => no decision (invariant 2).
       if (!quote || quote.last == null) return;
       const touched = b.positionSide === 'LONG' ? quote.last >= b.targetPrice : quote.last <= b.targetPrice;
       if (!touched) return;
@@ -335,12 +354,14 @@ class OcoWatcher {
 
       // Invariant 1: the stop must be CONFIRMED gone before the target goes in, or both could
       // fill and flip the position to the opposite side.
-      await this.client.cancelOrder(b.accountIdKey, b.stopOrderId);
-      const gone = await this._confirmGone(b.accountIdKey, b.stopOrderId);
-      if (!gone) {
-        b.state = STATES.ERROR;
-        b.note = 'could not confirm stop cancellation — target NOT placed (refusing to risk a double exit)';
-        return;
+      if (b.stopOrderId) {
+        await this.client.cancelOrder(b.accountIdKey, b.stopOrderId);
+        const gone = await this._confirmGone(b.accountIdKey, b.stopOrderId);
+        if (!gone) {
+          b.state = STATES.ERROR;
+          b.note = 'could not confirm stop cancellation — target NOT placed (refusing to risk a double exit)';
+          return;
+        }
       }
 
       const spec = {
