@@ -228,17 +228,29 @@ class EtradeClient {
     });
     const b = j?.BalanceResponse || {};
     const c = b.Computed || {};
+    const rt = c.RealTimeValues || {};
+
+    // Which of these a response carries depends on the account type (a cash account has no
+    // margin buying power at all), so each falls back rather than reporting a hard zero.
+    // `num()` returns 0 for a missing field, so ?? never fires — use a first-present pick.
+    const first = (...vals) => {
+      for (const v of vals) if (v !== undefined && v !== null && v !== '') return num(v);
+      return null;
+    };
+
     return {
       accountId: b.accountId,
       accountType: b.accountType,
-      netAccountValue: num(c.RealTimeValues?.totalAccountValue) ?? num(c.accountBalance),
-      cash: num(c.cashAvailableForInvestment) ?? num(c.cashBalance),
-      settledCash: num(c.settledCashForInvestment),
-      buyingPower: num(c.marginBuyingPower) ?? num(c.cashBuyingPower),
-      cashBuyingPower: num(c.cashBuyingPower),
-      marginBuyingPower: num(c.marginBuyingPower),
-      dayTradingBuyingPower: num(c.dtMarginBuyingPower) ?? num(c.dtCashBuyingPower),
-      totalUnrealizedGain: num(c.RealTimeValues?.totalLongValue),
+      netAccountValue: first(rt.totalAccountValue, c.accountBalance, c.netCash),
+      cash: first(c.cashAvailableForInvestment, c.cashBalance, c.netCash),
+      settledCash: first(c.settledCashForInvestment),
+      buyingPower: first(c.marginBuyingPower, c.cashBuyingPower, c.cashAvailableForInvestment),
+      cashBuyingPower: first(c.cashBuyingPower, c.cashAvailableForInvestment),
+      marginBuyingPower: first(c.marginBuyingPower),
+      dayTradingBuyingPower: first(c.dtMarginBuyingPower, c.dtCashBuyingPower),
+      // E*TRADE's balance has no unrealized-gain figure. Reporting 0 while positions are open
+      // would be a lie, so it stays null and the UI sums it from the positions it already has.
+      totalUnrealizedGain: null,
       raw: b,
     };
   }
@@ -278,7 +290,11 @@ class EtradeClient {
    * Executed transactions. E*TRADE's own trade feed, used for the all-time archive.
    * Dates are MMDDYYYY; a window is derived from `days` so callers keep the IBKR-style API.
    */
-  async getTransactions(accountIdKey, { days = 6, count = 250 } = {}) {
+  async getTransactions(accountIdKey, { days = 6, count = 50 } = {}) {
+    // Measured against the live API: count > 50 makes this endpoint return HTTP 500, with no
+    // error body explaining why. Clamp rather than let a caller's larger page size kill the
+    // trade archive. Paging beyond 50 uses the `marker` the response carries.
+    count = Math.min(Number(count) || 50, 50);
     const fmt = (d) =>
       `${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}${d.getFullYear()}`;
     const end = new Date();
@@ -290,12 +306,15 @@ class EtradeClient {
     if (!j) return [];
 
     return arr(j?.TransactionListResponse?.Transaction).map((t) => {
-      const b = t.Brokerage || {};
+      // E*TRADE lower-cases these two keys here and only here (`brokerage`/`product`), unlike
+      // the Pascal-cased envelopes everywhere else. Accept both spellings.
+      const b = t.brokerage || t.Brokerage || {};
+      const prod = b.product || b.Product || {};
       return {
         transactionId: String(t.transactionId ?? ''),
         orderNo: String(b.orderNo ?? ''),
-        symbol: b.Product?.symbol || b.displaySymbol || '',
-        securityType: b.Product?.securityType || 'EQ',
+        symbol: (prod.symbol || String(b.displaySymbol ?? '').trim() || '').toUpperCase(),
+        securityType: prod.securityType || 'EQ',
         // Quantity is signed at E*TRADE: positive bought, negative sold.
         quantity: num(b.quantity),
         price: num(b.price),
@@ -508,7 +527,11 @@ class EtradeClient {
 
     const results = await Promise.all(
       chunks.map((chunk) =>
-        this._api('GET', `/v1/market/quote/${encodeURIComponent(chunk.join(','))}`, {
+        // The comma separator MUST stay raw. Percent-encoding it to %2C makes our signature
+        // base string disagree with the one E*TRADE computes, and every multi-symbol request
+        // comes back oauth_problem=signature_invalid. Tickers are alphanumeric plus . and -,
+        // all legal unencoded in a path segment.
+        this._api('GET', `/v1/market/quote/${chunk.join(',')}`, {
           query: { detailFlag, overrideSymbolCount: chunk.length > 25 ? 'true' : undefined },
         })
       )

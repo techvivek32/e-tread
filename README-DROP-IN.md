@@ -20,6 +20,7 @@ nova-etrade/
 │   ├── test/
 │   │   ├── oauth1.test.cjs        8 tests — incl. the canonical OAuth Core 1.0 A.5.1 vector
 │   │   └── oco.test.cjs           11 tests — incl. the double-exit safety invariant
+│   ├── tools/live-check.cjs       drives every endpoint against the real API and prints the result
 │   ├── package.json · .env.example · ecosystem.config.cjs
 ├── src/
 │   ├── lib/api/etrade.ts          THE broker layer — drop-in replacement for ibkr.ts
@@ -32,7 +33,7 @@ nova-etrade/
 
 ```
 $ node test/oauth1.test.cjs     8 passed
-$ node test/oco.test.cjs       11 passed
+$ node test/oco.test.cjs       14 passed
 $ npx tsc --noEmit (in the host app)  strict, clean — 0 errors across 105 files
 $ node --check <every .cjs>        clean
 ```
@@ -45,6 +46,35 @@ The bracket tests cover the paths that cost money: an unverifiable stop becomes 
 a filled stop never spawns a target, a restart never duplicates a live stop, and —
 **the important one** — if the stop cancellation cannot be confirmed, the target is *not*
 placed, because both filling would flip the position to the opposite side.
+
+## 2b. Confirmed against the live E*TRADE sandbox
+
+`node server/tools/live-check.cjs` drives every endpoint the terminal uses and prints what came
+back. Current result: **14 passed, 0 failed.** The OAuth handshake, account list, balance,
+portfolio, quotes (including >50-symbol chunking), symbol lookup, order book, order
+preview -> place -> cancel, option expiries, option chain with greeks, transactions and
+`renew_access_token` all work against the real API.
+
+Three real bugs were found this way and fixed — none would have shown up in unit tests:
+
+| Bug | Symptom | Cause |
+|---|---|---|
+| Multi-symbol quotes all failed | `oauth_problem=signature_invalid` | The comma separator was percent-encoded to `%2C` in the path, so our signature base string disagreed with E*TRADE's. Commas must stay raw. |
+| Trade archive always empty | fields silently blank | The transaction envelope lower-cases `brokerage`/`product`, unlike every other Pascal-cased response. |
+| Trade archive returned HTTP 500 | no error body | `count` above 50 makes the transactions endpoint fail. Now clamped. |
+
+**What the sandbox cannot prove.** It serves canned fixtures: quotes come back as
+GOOG/IBM/SWOIX with null prices whatever you ask for, the order book is a static list from
+2012, balances are zeroed and transactions are 2013 transfers. So these must be re-checked on
+the first production day, and the live check labels each one `SANDBOX` rather than claiming a pass:
+
+- **order verification** — the most important one. A just-placed order never appears in the
+  sandbox order book, so the poll cannot be exercised end to end. Re-run in production.
+- **balance field mapping** — every figure is zero here, so the buying-power fallbacks are unproven.
+- **quote prices and symbol matching**.
+- **live option expiries** (the fixture returns 2012 dates).
+
+---
 
 ## 3. What is NOT done — three integration points
 
