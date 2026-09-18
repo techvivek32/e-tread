@@ -11,6 +11,7 @@
 'use strict';
 
 const { authHeader, parseTokenResponse } = require('./oauth1.cjs');
+const series = require('./series.cjs');
 
 const PROD = 'https://api.etrade.com';
 const SANDBOX = 'https://apisb.etrade.com';
@@ -565,6 +566,10 @@ class EtradeClient {
         });
       })
     );
+    // Feed the intraday recorder. E*TRADE has no history endpoint, so the chart is built
+    // from these same quotes rather than from a second source that could disagree with the
+    // price the order desk is using.
+    series.recordAll(out);
     return out;
   }
 

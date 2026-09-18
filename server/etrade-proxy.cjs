@@ -31,7 +31,7 @@ const { TokenStore } = require('./lib/token-store.cjs');
 const { Throttle } = require('./lib/throttle.cjs');
 const { EtradeClient, EtradeError } = require('./lib/etrade-client.cjs');
 const { OcoWatcher } = require('./lib/oco-watcher.cjs');
-const { getCandles } = require('./lib/chart.cjs');
+const series = require('./lib/series.cjs');
 
 // ------------------------------------------------------------------ configuration
 
@@ -157,6 +157,7 @@ app.get('/health', (_req, res) => {
     session: tokens.status().state,
     oco: oco.health(),
     throttle: throttle.stats(),
+    series: series.stats(),
     uptimeSec: Math.floor(process.uptime()),
   });
 });
@@ -359,8 +360,12 @@ app.get(
 );
 
 /**
- * Candles for the chart UI. E*TRADE has no history endpoint, so this serves consolidated-tape
- * data server-side. Display only — never the basis for an execution decision.
+ * Intraday candles, built from E*TRADE's own quotes as this server serves them.
+ *
+ * There is no third-party feed behind this. E*TRADE publishes no history endpoint, so the
+ * alternative would have been a second data source that can disagree with the broker at the
+ * exact moment a trader is acting on it. The response says where the data came from and how
+ * far back it goes, so the UI can be honest about the gap instead of implying full history.
  */
 app.get(
   '/api/market/chart',
@@ -368,7 +373,12 @@ app.get(
   wrap(async (req, res) => {
     const symbol = String(req.query.symbol || '').trim();
     if (!symbol) return res.status(400).json({ error: 'symbol required' });
-    res.json(await getCandles(symbol, req.query.period, req.query.bar));
+
+    // Touch the quote so a first-time symbol starts recording immediately rather than
+    // showing an empty chart until some other page happens to ask for it.
+    await client.getQuotes([symbol]).catch(() => null);
+
+    res.json(series.series(symbol, { limit: Number(req.query.limit) || undefined }));
   })
 );
 
