@@ -416,6 +416,21 @@ class EtradeClient {
       ],
     };
 
+    // Outside regular hours E*TRADE accepts DAY LIMIT orders only. A GTC term with an
+    // EXTENDED session is rejected with error code 5, "The term you specified for this
+    // order is invalid" — which reaches a trader as a cryptic failure at the moment they
+    // are trying to act. Enforce the rule here, where every caller passes through, rather
+    // than trusting each UI to remember it.
+    if (order.marketSession === 'EXTENDED' || order.marketSession === 'EXTO') {
+      if (order.priceType !== 'LIMIT') {
+        throw new EtradeError(
+          'Outside regular hours E*TRADE accepts limit orders only — pick a limit price',
+          { status: 400, code: 'EXTENDED_LIMIT_ONLY' }
+        );
+      }
+      order.orderTerm = 'GOOD_FOR_DAY';
+    }
+
     if (spec.limitPrice != null) order.limitPrice = String(spec.limitPrice);
     if (spec.stopPrice != null) order.stopPrice = String(spec.stopPrice);
     if (spec.trailingAmount != null) {
