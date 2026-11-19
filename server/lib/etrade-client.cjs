@@ -586,20 +586,40 @@ class EtradeClient {
     results.forEach((j) =>
       arr(j?.QuoteResponse?.QuoteData).forEach((q) => {
         const a = q.All || {};
+
+        // Outside regular hours E*TRADE leaves lastTrade sitting on the previous
+        // close and reports changeClose as 0. The pre-market and after-hours price
+        // is real and live, but it arrives in a block of its own — so the terminal
+        // showed yesterday's close and a 0.00% move right through pre-market, and
+        // the chart, which is built from this same mapping, drew a flat line at it.
+        //
+        // The block says for itself whether it is live, which is worth more than
+        // deciding from a clock: EH_REALTIME means a quote is trading now, and the
+        // other EH statuses mean the session is not open and the regular fields are
+        // the honest ones.
+        const eh = a.ExtendedHourQuoteDetail || {};
+        const ehLive = eh.quoteStatus === 'EH_REALTIME' && num(eh.lastPrice) > 0;
+        const pick = (extended, regular) => (ehLive && num(extended) > 0 ? num(extended) : num(regular));
+
         out.push({
           symbol: q.Product?.symbol || a.symbolDescription,
-          last: num(a.lastTrade),
-          bid: num(a.bid),
-          ask: num(a.ask),
+          last: ehLive ? num(eh.lastPrice) : num(a.lastTrade),
+          bid: pick(eh.bid, a.bid),
+          ask: pick(eh.ask, a.ask),
+          // E*TRADE publishes no extended-session open/high/low. Left as they come:
+          // the intraday chart builds its own from this stream.
           open: num(a.open),
           high: num(a.high),
           low: num(a.low),
           prevClose: num(a.previousClose),
-          change: num(a.changeClose),
-          changePct: num(a.changeClosePercentage),
+          // Both are measured against the previous close, so they stay comparable.
+          change: ehLive ? num(eh.change) : num(a.changeClose),
+          changePct: ehLive ? num(eh.percentChange) : num(a.changeClosePercentage),
           volume: num(a.totalVolume),
-          quoteStatus: q.quoteStatus, // REALTIME | DELAYED | CLOSING | EH_REALTIME ...
-          dateTimeUTC: num(q.dateTimeUTC),
+          quoteStatus: ehLive ? eh.quoteStatus : q.quoteStatus, // REALTIME | DELAYED | CLOSING | EH_REALTIME ...
+          extendedHours: ehLive,
+          // The time of the trade being quoted, so the chart buckets it where it belongs.
+          dateTimeUTC: ehLive && num(eh.timeOfLastTrade) > 0 ? num(eh.timeOfLastTrade) : num(q.dateTimeUTC),
           raw: q,
         });
       })
