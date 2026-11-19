@@ -153,11 +153,51 @@ class EtradeClient {
       if (v !== undefined && v !== null && v !== '') url.searchParams.set(k, String(v));
     });
 
-    const out = await this.throttle.run(() =>
-      this._fetch(method, url.toString(), { token: creds.token, tokenSecret: creds.tokenSecret, body })
+    const out = await this._withRetry(method === 'GET', () =>
+      this.throttle.run(() =>
+        this._fetch(method, url.toString(), { token: creds.token, tokenSecret: creds.tokenSecret, body })
+      )
     );
     this.tokens.touch();
     return out;
+  }
+
+  /**
+   * Retry the blips that are nobody's fault.
+   *
+   * A terminal polls this API continuously, and one failed read empties a page:
+   * the app has no earlier reading to fall back on, so tiles go to $0.00 and
+   * lists go empty, which looks exactly like an account whose data has gone. One
+   * log held 31 oauth_problem=nonce_used, 13 503s, 8 504s and 10 dropped
+   * connections — every one of them a gap somebody saw and could not explain.
+   *
+   * Only safe methods, and only causes a second attempt can actually fix: a
+   * fresh nonce is signed per attempt, and a 5xx or a dropped socket is E*TRADE
+   * and the network being allowed a bad second. A 401 means the session is gone
+   * and asking again will not bring it back; a 400 means we sent something
+   * wrong. Orders are never retried at all — a resubmitted order is a second
+   * position, and the only thing worse than a failed order is two of them.
+   */
+  async _withRetry(safe, run) {
+    const ATTEMPTS = 3;
+    for (let i = 1; ; i += 1) {
+      try {
+        return await run();
+      } catch (e) {
+        const retryable =
+          e.status === 429 ||
+          e.status === 503 ||
+          e.status === 504 ||
+          e.status === undefined || // no HTTP reply at all: socket or DNS gave out
+          /nonce_used/i.test(e.message || '');
+        if (!safe || i >= ATTEMPTS || !retryable) throw e;
+        console.warn(
+          `[etrade] transient ${e.status || 'network'} on attempt ${i}, retrying: ${String(e.message).slice(0, 90)}`
+        );
+        // A rate limit needs longer than a hiccup does.
+        await new Promise((r) => setTimeout(r, (e.status === 429 ? 1500 : 400) * i));
+      }
+    }
   }
 
   // ------------------------------------------------------------ oauth 1.0a flow
