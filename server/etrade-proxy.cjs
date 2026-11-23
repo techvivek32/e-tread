@@ -200,7 +200,26 @@ app.post(
     if (!verifier) return res.status(400).json({ error: 'verifier (the 5-character code) is required' });
     if (!pendingAuth) return res.status(409).json({ error: 'no pending authorization — start again' });
 
-    const { token, tokenSecret } = await client.completeAuth({ ...pendingAuth, verifier });
+    // E*TRADE's request token lasts about five minutes. Past that their own page
+    // answers "Due to a logon delay or other issue, your authentication could not
+    // be completed", which mentions no clock, so the failure arrives here looking
+    // like a broken integration rather than a link that went stale while a tab sat
+    // open. Say which it was.
+    const ageMs = Date.now() - (pendingAuth.startedAt || 0);
+    let token, tokenSecret;
+    try {
+      ({ token, tokenSecret } = await client.completeAuth({ ...pendingAuth, verifier }));
+    } catch (e) {
+      if (ageMs > 5 * 60_000) {
+        pendingAuth = null;
+        throw new EtradeError(
+          `That E*TRADE page was opened ${Math.round(ageMs / 60000)} minutes ago and their link only ` +
+            'lasts about five. Press "Authorise on E*TRADE" for a fresh one and finish straight away.',
+          { status: 410, code: 'REQUEST_TOKEN_STALE' }
+        );
+      }
+      throw e;
+    }
     pendingAuth = null;
     tokens.set({ token, tokenSecret });
 
