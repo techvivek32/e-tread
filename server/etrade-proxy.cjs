@@ -183,11 +183,27 @@ app.post(
   verifyCaller,
   wrap(async (_req, res) => {
     const started = await client.startAuth();
+    // The authorisation handshake was the one path with no trace at all: only
+    // failures were logged, so a trader staring at E*TRADE's "authentication
+    // could not be completed" page left nothing behind to tell us whether a
+    // token had even been minted, which one, or whether a second tab had
+    // replaced it moments later. Three short lines make the whole handshake
+    // readable after the fact. The token tail identifies it without writing a
+    // live credential to a log file.
+    const tail = String(started.requestToken).slice(-10);
+    if (pendingAuth) {
+      const ageS = Math.round((Date.now() - pendingAuth.startedAt) / 1000);
+      console.log(
+        `[auth] REPLACING a pending authorisation from ${ageS}s ago (…${String(pendingAuth.requestToken).slice(-10)}) ` +
+          '— whichever page it opened is now dead'
+      );
+    }
     pendingAuth = {
       requestToken: started.requestToken,
       requestTokenSecret: started.requestTokenSecret,
       startedAt: Date.now(),
     };
+    console.log(`[auth] start -> request token …${tail} minted for ${_req.userEmail || 'unknown'}`);
     res.json({ authorizeUrl: started.authorizeUrl });
   })
 );
@@ -206,6 +222,10 @@ app.post(
     // like a broken integration rather than a link that went stale while a tab sat
     // open. Say which it was.
     const ageMs = Date.now() - (pendingAuth.startedAt || 0);
+    console.log(
+      `[auth] complete -> code "${verifier}" against token …${String(pendingAuth.requestToken).slice(-10)}, ` +
+        `minted ${Math.round(ageMs / 1000)}s ago`
+    );
     let token, tokenSecret;
     try {
       ({ token, tokenSecret } = await client.completeAuth({ ...pendingAuth, verifier }));
@@ -222,6 +242,7 @@ app.post(
     }
     pendingAuth = null;
     tokens.set({ token, tokenSecret });
+    console.log('[auth] complete -> ACCESS TOKEN GRANTED');
 
     // Adopt the account immediately so nothing downstream has to guess (multi-account model).
     const accounts = await client.listAccounts();
