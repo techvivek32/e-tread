@@ -403,23 +403,52 @@ class EtradeClient {
    *   status: OPEN|EXECUTED|CANCELLED|INDIVIDUAL_FILLS|CANCEL_REQUESTED|EXPIRED|REJECTED
    *   dates are MMDDYYYY
    */
+  /**
+   * `count` is how many orders the CALLER wants, across as many pages as that
+   * takes. It used to be a single request, and E*TRADE refuses a count above
+   * 100 ("Invalid count specified. The count should be between 1 and 100"), so
+   * asking for more quietly returned the newest 100 and dropped the rest.
+   *
+   * That is not a display problem. P&L here is reconstructed by walking fills
+   * in order and tracking the running position, so losing the OLDEST fills
+   * starts the walk mid-position: a cover with no short in front of it reads as
+   * opening a long. On 24 Nov this account had 104 orders, four of them past
+   * the window, and the four missing ones were the start of an NVDA short.
+   * Every later NVDA fill was then matched against a long 200 that had never
+   * existed, booking $983 of loss that never happened and turning a +$803 day
+   * into -$180.
+   *
+   * So page until the caller has what they asked for or the broker runs out.
+   * The response carries a marker for the next page and omits it on the last.
+   */
   async listOrders(accountIdKey, opts = {}) {
-    const j = await this._api('GET', `/v1/accounts/${accountIdKey}/orders`, {
-      query: {
-        // Measured against the live API: count above 100 is refused outright ("Invalid
-        // count specified. The count should be between 1 and 100"), and one oversized
-        // caller silently blinded the bracket watcher. Clamp here so no caller can.
-        count: Math.min(Number(opts.count) || 100, 100),
-        status: opts.status,
-        fromDate: opts.fromDate,
-        toDate: opts.toDate,
-        symbol: opts.symbol,
-        marketSession: opts.marketSession,
-      },
-    });
-    if (!j) return [];
+    const want = Math.max(1, Number(opts.count) || 100);
+    const PAGE = 100; // the API's own ceiling, per request
+    const raw = [];
+    let marker;
 
-    return arr(j?.OrdersResponse?.Order).map((o) => {
+    // A hard page bound as well as the marker check: a marker that never
+    // cleared would otherwise loop against a live brokerage API forever.
+    for (let page = 0; page < 25; page += 1) {
+      const j = await this._api('GET', `/v1/accounts/${accountIdKey}/orders`, {
+        query: {
+          count: Math.min(want - raw.length, PAGE),
+          marker,
+          status: opts.status,
+          fromDate: opts.fromDate,
+          toDate: opts.toDate,
+          symbol: opts.symbol,
+          marketSession: opts.marketSession,
+        },
+      });
+      const env = (j && j.OrdersResponse) || null;
+      const batch = arr(env && env.Order);
+      raw.push(...batch);
+      marker = env && env.marker;
+      if (!marker || !batch.length || raw.length >= want) break;
+    }
+
+    return raw.map((o) => {
       const d = arr(o.OrderDetail)[0] || {};
       const inst = arr(d.Instrument)[0] || {};
       return {
