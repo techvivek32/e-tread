@@ -114,6 +114,18 @@ class EtradeClient {
           'Log in at etrade.com, place any order for this ETF there once — it will prompt you to ' +
           'accept — then orders from here will work.';
       }
+      // Trailing stops — every flavour of them — sit behind E*TRADE's Advanced
+      // Order Disclosure. Unsigned, the API answers with that sentence and no
+      // hint that it is a one-time form on their website rather than something
+      // wrong with the order, so a trader protecting a profitable position is
+      // told only that it failed.
+      if (/Advanced Order Disclosure/i.test(message || '')) {
+        message =
+          'Your E*TRADE account has not signed the Advanced Order Disclosure, which is what gates ' +
+          'trailing stops. Sign it once at etrade.com (Accounts → Documents / Agreements), then ' +
+          'this will go straight through. Until then the exits available here are a fixed stop or ' +
+          'closing by hand.';
+      }
       if (String(code) === '30' || /Extended Hours Disclosure/i.test(message || '')) {
         message =
           'Your E*TRADE account has not signed the Extended Hours Trading agreement. ' +
