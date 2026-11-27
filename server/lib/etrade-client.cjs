@@ -119,6 +119,20 @@ class EtradeClient {
       // hint that it is a one-time form on their website rather than something
       // wrong with the order, so a trader protecting a profitable position is
       // told only that it failed.
+      // E*TRADE refuses extended-hours orders outside its own session even when
+      // the clock is inside the 4am-8pm window its message quotes — a shortened
+      // session, most often the half day after Thanksgiving or before a
+      // holiday, closes it without changing the wording. So the sentence tells
+      // a trader at 4:30am that orders are allowed between 4am and 8pm, which
+      // is exactly no help. Say what to do instead, since their own suggestion
+      // ("selecting a different duration/term") does not name the control.
+      if (/Extended Hours Day orders can only be placed/i.test(message || '')) {
+        message =
+          "E*TRADE is not taking extended-hours orders right now. Their message quotes a 4am-8pm " +
+          'window, but a shortened session — a half day after a holiday, for instance — closes it ' +
+          'early without saying so. Untick "After-hours execution" and the order goes in as a ' +
+          'regular-session order, queued for 09:30 ET.';
+      }
       if (/Advanced Order Disclosure/i.test(message || '')) {
         message =
           'Your E*TRADE account has not signed the Advanced Order Disclosure, which is what gates ' +
