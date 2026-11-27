@@ -487,13 +487,27 @@ class EtradeClient {
         quantity: num(inst.orderedQuantity) ?? num(inst.quantity),
         filledQuantity: num(inst.filledQuantity) ?? 0,
         avgExecutionPrice: num(inst.averageExecutionPrice),
+        // What the fill actually cost. E*TRADE charges no commission on US
+        // stocks, so estimatedCommission is 0 throughout, but estimatedFees
+        // carries the sell-side regulatory charge and is the only place it is
+        // reported per execution. Reading fees off the transactions feed
+        // instead found 16 of 67 fills, because that feed is capped at 50 rows
+        // and rewrites itself intraday; these agree with the cash to four
+        // cents across the account's whole history.
+        estimatedFees: num(inst.estimatedFees),
+        estimatedCommission: num(inst.estimatedCommission),
         priceType: d.priceType,
         limitPrice: num(d.limitPrice),
         stopPrice: num(d.stopPrice),
         orderTerm: d.orderTerm,
         marketSession: d.marketSession,
         placedTime: num(d.placedTime),
-        executedTime: num(d.executedTime),
+        // E*TRADE puts a small sentinel in executedTime on orders that never
+        // executed — 482847272 and friends, which read as a date in 1970 and
+        // rendered as a time-of-day on 32 of this account's cancelled rows.
+        // A real epoch-millisecond stamp for a live brokerage is far larger,
+        // so anything below the year 2001 is not a time and is dropped.
+        executedTime: num(d.executedTime) >= 978307200000 ? num(d.executedTime) : 0,
         netPrice: num(d.netPrice),
         product: inst.Product || null,
         raw: o,
